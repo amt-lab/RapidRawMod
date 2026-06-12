@@ -17,6 +17,12 @@ interface NegativeParams {
   blue_weight: number;
   contrast: number;
   exposure: number;
+  gamma: number;
+  bp_override: number[] | null;
+  wp_override: number[] | null;
+  bp_tweak: number;
+  wp_tweak: number;
+  excluded_margin_percent: number;
 }
 
 const DEFAULT_PARAMS: NegativeParams = {
@@ -25,7 +31,25 @@ const DEFAULT_PARAMS: NegativeParams = {
   blue_weight: 1.0,
   contrast: 1.0,
   exposure: 0.0,
+  gamma: 2.2,
+  bp_override: null,
+  wp_override: null,
+  bp_tweak: 0.0,
+  wp_tweak: 0.0,
+  excluded_margin_percent: 12,
 };
+
+const toBackendParams = (params: NegativeParams) => ({
+  ...params,
+  center_margin: params.excluded_margin_percent / 100,
+});
+
+interface NegPreviewResult {
+  image: string;
+  black_point: number[];
+  white_point: number[];
+  center_margin: number;
+}
 
 interface NegativeConversionModalProps {
   isOpen: boolean;
@@ -43,6 +67,7 @@ export default function NegativeConversionModal({
   const { t } = useTranslation();
   const [params, setParams] = useState<NegativeParams>(DEFAULT_PARAMS);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [stretchPoints, setStretchPoints] = useState<{ black: number[]; white: number[] } | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [progress, setProgress] = useState<{ current: number; total: number } | null>(null);
@@ -53,6 +78,9 @@ export default function NegativeConversionModal({
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState(false);
   const [isCompareActive, setIsCompareActive] = useState(false);
+  const [pickMode, setPickMode] = useState<'black' | 'white' | null>(null);
+  const [showAnalysisArea, setShowAnalysisArea] = useState(false);
+  const [analysisMargin, setAnalysisMargin] = useState(0.12);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const lastMousePos = useRef({ x: 0, y: 0 });
@@ -115,11 +143,13 @@ export default function NegativeConversionModal({
     throttle(async (currentParams: NegativeParams, isInitialLoad: boolean = false) => {
       if (!selectedImagePath) return;
       try {
-        const result: string = await invoke('preview_negative_conversion', {
+        const result: NegPreviewResult = await invoke('preview_negative_conversion', {
           path: selectedImagePath,
-          params: currentParams,
+          params: toBackendParams(currentParams),
         });
-        setPreviewUrl(result);
+        setPreviewUrl(result.image);
+        setStretchPoints({ black: result.black_point, white: result.white_point });
+        setAnalysisMargin(result.center_margin);
         if (isInitialLoad) {
           setIsLoading(false);
         }
@@ -156,7 +186,10 @@ export default function NegativeConversionModal({
       setTimeout(() => {
         setIsMounted(false);
         setPreviewUrl(null);
+        setStretchPoints(null);
         setOriginalUrl(null);
+        setPickMode(null);
+        setShowAnalysisArea(false);
         setParams(DEFAULT_PARAMS);
         setZoom(1);
         setPan({ x: 0, y: 0 });
@@ -172,6 +205,45 @@ export default function NegativeConversionModal({
     updatePreview(newParams);
   };
 
+  const handlePickClick = async (e: React.MouseEvent<HTMLImageElement>) => {
+    if (!pickMode || !selectedImagePath) return;
+
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = (e.clientX - rect.left) / rect.width;
+    const y = (e.clientY - rect.top) / rect.height;
+    if (x < 0 || x > 1 || y < 0 || y > 1) return;
+
+    try {
+      const point: number[] = await invoke('sample_negative_point', {
+        path: selectedImagePath,
+        x,
+        y,
+      });
+      const key = pickMode === 'black' ? 'bp_override' : 'wp_override';
+      const newParams = { ...params, [key]: point };
+      setParams(newParams);
+      updatePreview(newParams);
+    } catch (err) {
+      console.error('Negative point sample failed', err);
+    } finally {
+      setPickMode(null);
+    }
+  };
+
+  const resetPoints = () => {
+    const newParams = { ...params, bp_override: null, wp_override: null, bp_tweak: 0, wp_tweak: 0 };
+    setParams(newParams);
+    setPickMode(null);
+    updatePreview(newParams);
+  };
+
+  const resetAllControls = () => {
+    setParams(DEFAULT_PARAMS);
+    setPickMode(null);
+    setShowAnalysisArea(false);
+    updatePreview(DEFAULT_PARAMS);
+  };
+
   const handleSave = async () => {
     if (targetPaths.length === 0) return;
     setIsSaving(true);
@@ -179,7 +251,7 @@ export default function NegativeConversionModal({
     try {
       const savedPaths: string[] = await invoke('convert_negatives', {
         paths: targetPaths,
-        params,
+        params: toBackendParams(params),
       });
       onSave(savedPaths);
       onClose();
@@ -196,16 +268,17 @@ export default function NegativeConversionModal({
     transition: isDragging ? 'none' : 'transform 0.1s ease-out',
     transformOrigin: 'center center',
   };
+  const formatRgb = (values: number[]) => values.map((value) => String(value).padStart(3, ' ')).join(', ');
+  const controlButtonClass = 'px-2 py-1.5 rounded-md text-xs border transition-colors shadow-sm';
+  const inactiveControlButtonClass =
+    'bg-surface border-border-color text-text-primary shadow-[inset_0_1px_0_rgba(255,255,255,0.06),0_1px_2px_rgba(0,0,0,0.25)] hover:bg-card-active hover:border-text-secondary/40';
 
   const renderControls = () => (
     <div className="modal-adjustments-pane w-80 shrink-0 bg-bg-secondary flex flex-col border-l border-surface h-full z-10">
       <div className="p-4 flex justify-between items-center shrink-0 border-b border-surface">
         <Text variant={TextVariants.title}>{t('modals.negativeConversion.title')}</Text>
         <button
-          onClick={() => {
-            setParams(DEFAULT_PARAMS);
-            updatePreview(DEFAULT_PARAMS);
-          }}
+          onClick={resetAllControls}
           disabled={isSaving}
           data-tooltip={t('modals.negativeConversion.resetTooltip')}
           className="p-2 rounded-full hover:bg-surface transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
@@ -281,8 +354,111 @@ export default function NegativeConversionModal({
               onChange={(e) => handleParamChange('contrast', Number(e.target.value))}
               fillOrigin="min"
             />
+            <Slider
+              label="Gamma"
+              value={params.gamma}
+              min={0.5}
+              max={3.0}
+              step={0.05}
+              defaultValue={2.2}
+              onChange={(e) => handleParamChange('gamma', Number(e.target.value))}
+              fillOrigin="min"
+            />
           </div>
         </div>
+
+        <div
+          className={clsx('transition-opacity duration-200', isSaving && 'opacity-50 pointer-events-none grayscale')}
+        >
+          <Text variant={TextVariants.heading} className="mb-2">
+            Black / White Points
+          </Text>
+          <div className="space-y-3 mb-3">
+            <Slider
+              label="Excluded Margin (%)"
+              value={params.excluded_margin_percent}
+              min={0}
+              max={30}
+              step={1}
+              defaultValue={12}
+              onChange={(e) => handleParamChange('excluded_margin_percent', Number(e.target.value))}
+            />
+            <button
+              onClick={() => setShowAnalysisArea((showArea) => !showArea)}
+              className={clsx(
+                'w-full',
+                controlButtonClass,
+                showAnalysisArea ? 'bg-accent text-button-text border-accent' : inactiveControlButtonClass,
+              )}
+            >
+              {showAnalysisArea ? 'Hide analysis area' : 'Show analysis area'}
+            </button>
+          </div>
+          <div className="flex gap-2 mb-3">
+            <button
+              onClick={() => setPickMode((mode) => (mode === 'black' ? null : 'black'))}
+              className={clsx(
+                'flex-1',
+                controlButtonClass,
+                pickMode === 'black' ? 'bg-accent text-button-text border-accent' : inactiveControlButtonClass,
+              )}
+            >
+              {pickMode === 'black' ? 'Click image...' : 'Set Black'}
+            </button>
+            <button
+              onClick={() => setPickMode((mode) => (mode === 'white' ? null : 'white'))}
+              className={clsx(
+                'flex-1',
+                controlButtonClass,
+                pickMode === 'white' ? 'bg-accent text-button-text border-accent' : inactiveControlButtonClass,
+              )}
+            >
+              {pickMode === 'white' ? 'Click image...' : 'Set White'}
+            </button>
+            <button
+              onClick={resetPoints}
+              data-tooltip="Reset points and tweaks to auto"
+              className={clsx(controlButtonClass, inactiveControlButtonClass)}
+            >
+              Auto
+            </button>
+          </div>
+          <div className="space-y-3">
+            <Slider
+              label="BP Tweak"
+              value={params.bp_tweak}
+              min={-0.1}
+              max={0.1}
+              step={0.01}
+              defaultValue={0}
+              onChange={(e) => handleParamChange('bp_tweak', Number(e.target.value))}
+            />
+            <Slider
+              label="WP Tweak"
+              value={params.wp_tweak}
+              min={-0.1}
+              max={0.1}
+              step={0.01}
+              defaultValue={0}
+              onChange={(e) => handleParamChange('wp_tweak', Number(e.target.value))}
+            />
+          </div>
+        </div>
+
+        {stretchPoints && (
+          <div className="mt-[-0.5rem]">
+            <div className="text-xs font-mono text-text-secondary space-y-1 p-3 bg-surface rounded-md border border-surface">
+              <div>
+                <span className="text-text-tertiary">Black RGB: </span>
+                <span>{formatRgb(stretchPoints.black)}</span>
+              </div>
+              <div>
+                <span className="text-text-tertiary">White RGB: </span>
+                <span>{formatRgb(stretchPoints.white)}</span>
+              </div>
+            </div>
+          </div>
+        )}
 
         <div className="mt-auto pt-4 space-y-2">
           <Text
@@ -346,11 +522,22 @@ export default function NegativeConversionModal({
                 <div className="relative inline-block shadow-2xl">
                   <img
                     src={isCompareActive && originalUrl ? originalUrl : previewUrl || ''}
-                    className="block object-contain"
+                    className={clsx(
+                      'block object-contain',
+                      pickMode ? 'pointer-events-auto cursor-crosshair' : 'pointer-events-none',
+                    )}
                     style={{ maxWidth: '100%', maxHeight: '100%', width: 'auto', height: 'auto' }}
                     alt="Preview"
                     draggable={false}
+                    onMouseDown={pickMode ? (e) => e.stopPropagation() : undefined}
+                    onClick={pickMode ? handlePickClick : undefined}
                   />
+                  {showAnalysisArea && (
+                    <div
+                      className="absolute pointer-events-none border-2 border-yellow-400/80 bg-yellow-400/15"
+                      style={{ inset: `${analysisMargin * 100}%` }}
+                    />
+                  )}
                   {isCompareActive && (
                     <Text
                       as="div"
