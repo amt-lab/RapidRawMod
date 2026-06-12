@@ -18,6 +18,55 @@ use crate::image_processing::downscale_f32_image;
 use crate::load_settings;
 use tauri::Emitter;
 
+// Pseudo-log post-gamma (ported from neg-invert; mimics log tone redistribution).
+const PSL_GAMMA: f32 = 1.6;
+
+// Auto black/white point percentiles, as fractions of the sorted samples.
+// 0.001 = 0.1st percentile (low end -> black point base);
+// 0.999 = 99.9th percentile (high end -> white point base).
+// Symmetric 0.1% in from each end. Tweak here to change the auto stretch.
+
+//const PCT_LOW: f32 = 0.001;
+//const PCT_HIGH: f32 = 0.999;
+
+const PCT_LOW: f32 = 0.05;
+const PCT_HIGH: f32 = 0.995;
+
+
+// Fraction of width/height trimmed from EACH side before percentile analysis.
+// 0.12 -> central 76% region (100% - 12% - 12%). Raise to ignore more of the
+// borders (film edges/sprockets), lower to analyze more of the frame.
+const CENTER_MARGIN: f32 = 0.12;
+
+// Conversion mode = which working space the invert+stretch happens in.
+// See docs RapidRaw-negative-conversion-modes.md.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum ConversionMode {
+    Lin, // linear inversion: work = 1 - v
+    Psl, // pseudo-log: linear inversion, then work^PSL_GAMMA after the stretch
+    #[default]
+    Log, // optical density: work = -log10(v)
+}
+
+// Forward transform: scanned-negative pixel -> working space (per channel).
+#[inline]
+fn to_working(v: f32, mode: ConversionMode) -> f32 {
+    match mode {
+        ConversionMode::Log => -v.clamp(1e-6, 1.0).log10(),
+        _ => 1.0 - v.clamp(0.0, 1.0), // lin and psl share linear inversion
+    }
+}
+
+// Inverse transform: working-space value -> negative pixel value (for the readout).
+#[inline]
+fn from_working(d: f32, mode: ConversionMode) -> f32 {
+    match mode {
+        ConversionMode::Log => 10f32.powf(-d),
+        _ => 1.0 - d,
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Copy)]
 pub struct NegativeConversionParams {
     pub red_weight: f32,
@@ -26,6 +75,22 @@ pub struct NegativeConversionParams {
 
     pub exposure: f32,
     pub contrast: f32,
+    pub gamma: f32,
+
+    #[serde(default)]
+    pub mode: ConversionMode,
+
+    // Black/white point picking (ported from neg-invert). Overrides are per-channel
+    // values in density working space (-log10(px)); None = use auto percentile.
+    // Tweaks slide each endpoint along the black->white axis by tweak * range.
+    #[serde(default)]
+    pub bp_override: Option<[f32; 3]>,
+    #[serde(default)]
+    pub wp_override: Option<[f32; 3]>,
+    #[serde(default)]
+    pub bp_tweak: f32,
+    #[serde(default)]
+    pub wp_tweak: f32,
 }
 
 impl Default for NegativeConversionParams {
@@ -36,6 +101,12 @@ impl Default for NegativeConversionParams {
             blue_weight: 1.0,
             exposure: 0.0,
             contrast: 1.0,
+            gamma: 2.2,
+            mode: ConversionMode::Log,
+            bp_override: None,
+            wp_override: None,
+            bp_tweak: 0.0,
+            wp_tweak: 0.0,
         }
     }
 }
@@ -46,9 +117,64 @@ pub struct ChannelBounds {
     pub max: f32,
 }
 
+#[derive(Serialize, Clone)]
+pub struct NegativePreviewResult {
+    pub image: String,
+    // Negative pixel values [0,255] at the auto-selected endpoints.
+    // black_point maps to output black, white_point maps to output white.
+    pub black_point: [u16; 3],
+    pub white_point: [u16; 3],
+    // Fraction trimmed from each side for percentile analysis (== CENTER_MARGIN),
+    // sent so the GUI can draw the analysis region without hardcoding it.
+    pub center_margin: f32,
+}
+
+// Resolve the effective per-channel black/white points (density working space)
+// the pipeline actually uses: start from a click override or the auto percentile
+// bounds, then slide each endpoint along the black->white axis by tweak * range.
+// (Ported from neg-invert `_run_stretch`; direction of the axis is preserved.)
+fn resolve_points(bounds: &[ChannelBounds; 3], params: &NegativeConversionParams) -> ([f32; 3], [f32; 3]) {
+    let mut bp_base = [bounds[0].min, bounds[1].min, bounds[2].min];
+    let mut wp_base = [bounds[0].max, bounds[1].max, bounds[2].max];
+    if let Some(o) = params.bp_override {
+        bp_base = o;
+    }
+    if let Some(o) = params.wp_override {
+        wp_base = o;
+    }
+
+    let mut bp = [0.0f32; 3];
+    let mut wp = [0.0f32; 3];
+    for c in 0..3 {
+        let rng = (wp_base[c] - bp_base[c]).max(1e-6);
+        bp[c] = bp_base[c] + params.bp_tweak * rng;
+        wp[c] = wp_base[c] + params.wp_tweak * rng;
+    }
+    (bp, wp)
+}
+
+// Convert the density-space endpoints back to negative pixel values in the
+// standard [0,255] range, split into the two output roles.
+fn points_to_display_255(bp: &[f32; 3], wp: &[f32; 3], mode: ConversionMode) -> ([u16; 3], [u16; 3]) {
+    let to_255 = |d: f32| -> u16 {
+        let v = from_working(d, mode); // back to negative pixel value
+        (v * 255.0).round().clamp(0.0, 255.0) as u16
+    };
+
+    let mut black = [0u16; 3];
+    let mut white = [0u16; 3];
+    for c in 0..3 {
+        // bp (low density / thin film) -> output BLACK
+        black[c] = to_255(bp[c]);
+        // wp (high density / dense film) -> output WHITE
+        white[c] = to_255(wp[c]);
+    }
+    (black, white)
+}
+
 fn analyze_bounds(log_data: &[f32], width: usize, height: usize) -> [ChannelBounds; 3] {
-    let margin_x = (width as f32 * 0.12) as usize;
-    let margin_y = (height as f32 * 0.12) as usize;
+    let margin_x = (width as f32 * CENTER_MARGIN) as usize;
+    let margin_y = (height as f32 * CENTER_MARGIN) as usize;
 
     let est_pixels = (width.saturating_sub(margin_x * 2)) * (height.saturating_sub(margin_y * 2));
     let step = (est_pixels / 40_000).max(1);
@@ -90,8 +216,8 @@ fn analyze_bounds(log_data: &[f32], width: usize, height: usize) -> [ChannelBoun
 
         let len = vals.len() as f32;
 
-        let min_idx = (len * 0.001) as usize;
-        let max_idx = (len * 0.999) as usize;
+        let min_idx = (len * PCT_LOW) as usize;
+        let max_idx = (len * PCT_HIGH) as usize;
 
         let min = vals[min_idx.min(vals.len().saturating_sub(1))];
         let max = vals[max_idx.min(vals.len().saturating_sub(1))];
@@ -113,9 +239,10 @@ fn run_pipeline(
     let (width, height) = rgb.dimensions();
     let raw_pixels = rgb.as_raw();
 
+    let mode = params.mode;
     let log_pixels: Vec<f32> = raw_pixels
         .par_iter()
-        .map(|&v| -v.clamp(1e-6, 1.0).log10())
+        .map(|&v| to_working(v, mode))
         .collect();
 
     let bounds = if let Some(b) = override_bounds {
@@ -124,11 +251,14 @@ fn run_pipeline(
         analyze_bounds(&log_pixels, width as usize, height as usize)
     };
 
+    let (bp, wp) = resolve_points(&bounds, params);
+    let psl = mode == ConversionMode::Psl;
+
     let mut out_buffer = vec![0.0f32; raw_pixels.len()];
 
     let k = 4.0 * params.contrast.max(0.1);
     let x0 = 0.6 - (params.exposure * 0.25);
-    let gamma_inv = 1.0 / 2.2;
+    let gamma_inv = 1.0 / params.gamma.max(0.01);
 
     let y0 = 1.0 / (1.0 + (k * x0).exp());
     let y1 = 1.0 / (1.0 + (-k * (1.0 - x0)).exp());
@@ -140,13 +270,25 @@ fn run_pipeline(
         .for_each(|(i, out_pixel)| {
             let idx = i * 3;
 
-            let mut n_r = (log_pixels[idx] - bounds[0].min) / (bounds[0].max - bounds[0].min);
-            let mut n_g = (log_pixels[idx + 1] - bounds[1].min) / (bounds[1].max - bounds[1].min);
-            let mut n_b = (log_pixels[idx + 2] - bounds[2].min) / (bounds[2].max - bounds[2].min);
+            let mut n_r = (log_pixels[idx] - bp[0]) / (wp[0] - bp[0]).max(1e-6);
+            let mut n_g = (log_pixels[idx + 1] - bp[1]) / (wp[1] - bp[1]).max(1e-6);
+            let mut n_b = (log_pixels[idx + 2] - bp[2]) / (wp[2] - bp[2]).max(1e-6);
 
-            n_r = n_r.max(0.0) * params.red_weight;
-            n_g = n_g.max(0.0) * params.green_weight;
-            n_b = n_b.max(0.0) * params.blue_weight;
+            n_r = n_r.max(0.0);
+            n_g = n_g.max(0.0);
+            n_b = n_b.max(0.0);
+
+            // PSL: pseudo-log gamma applied to the normalized stretch result,
+            // mirroring neg-invert's post-stretch power. (lin/log: no-op.)
+            if psl {
+                n_r = n_r.powf(PSL_GAMMA);
+                n_g = n_g.powf(PSL_GAMMA);
+                n_b = n_b.powf(PSL_GAMMA);
+            }
+
+            n_r *= params.red_weight;
+            n_g *= params.green_weight;
+            n_b *= params.blue_weight;
 
             let apply_curve = |x: f32| -> f32 {
                 let sigmoid = 1.0 / (1.0 + (-k * (x - x0)).exp());
@@ -185,7 +327,7 @@ pub async fn preview_negative_conversion(
     params: NegativeConversionParams,
     state: tauri::State<'_, AppState>,
     app_handle: AppHandle,
-) -> Result<String, String> {
+) -> Result<NegativePreviewResult, String> {
     let (source_path, _) = parse_virtual_path(&path);
     let source_path_str = source_path.to_string_lossy().to_string();
 
@@ -268,7 +410,22 @@ pub async fn preview_negative_conversion(
         }
     };
 
-    let processed = run_pipeline(&base_image_for_processing, &params, None);
+    // Compute the auto black/white points (percentiles in log/density space)
+    // up front so they drive the pipeline AND get reported back to the GUI.
+    let rgb = base_image_for_processing.to_rgb32f();
+    let (w, h) = rgb.dimensions();
+    let log_pixels: Vec<f32> = rgb
+        .as_raw()
+        .par_iter()
+        .map(|&v| to_working(v, params.mode))
+        .collect();
+    let bounds = analyze_bounds(&log_pixels, w as usize, h as usize);
+    // Report the EFFECTIVE points (after click override + tweak), so the readout
+    // matches what the pipeline applies.
+    let (bp, wp) = resolve_points(&bounds, &params);
+    let (black_point, white_point) = points_to_display_255(&bp, &wp, params.mode);
+
+    let processed = run_pipeline(&base_image_for_processing, &params, Some(bounds));
 
     let mut buf = Cursor::new(Vec::new());
     processed
@@ -277,7 +434,12 @@ pub async fn preview_negative_conversion(
         .map_err(|e| e.to_string())?;
 
     let base64_str = general_purpose::STANDARD.encode(buf.get_ref());
-    Ok(format!("data:image/jpeg;base64,{}", base64_str))
+    Ok(NegativePreviewResult {
+        image: format!("data:image/jpeg;base64,{}", base64_str),
+        black_point,
+        white_point,
+        center_margin: CENTER_MARGIN,
+    })
 }
 
 #[tauri::command]
@@ -319,7 +481,7 @@ pub async fn convert_negatives(
             let log_pixels: Vec<f32> = ref_rgb
                 .as_raw()
                 .par_iter()
-                .map(|&v| -v.clamp(1e-6, 1.0).log10())
+                .map(|&v| to_working(v, params.mode))
                 .collect();
             let bounds = analyze_bounds(&log_pixels, ref_w as usize, ref_h as usize);
 
@@ -344,4 +506,68 @@ pub async fn convert_negatives(
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+// Sample the clicked point on the cached downscaled negative and return its
+// per-channel value in the CURRENT mode's working space, ready to drop into
+// `bp_override` / `wp_override`. `x`/`y` are normalized [0,1] over the preview.
+// Averages a small patch for stability (mirrors the main editor's WB picker).
+#[tauri::command]
+pub async fn sample_negative_point(
+    path: String,
+    x: f32,
+    y: f32,
+    mode: ConversionMode,
+    state: tauri::State<'_, AppState>,
+) -> Result<[f32; 3], String> {
+    let (source_path, _) = parse_virtual_path(&path);
+    let source_path_str = source_path.to_string_lossy().to_string();
+
+    let mut hasher = DefaultHasher::new();
+    source_path_str.hash(&mut hasher);
+    "negative_preview_base".hash(&mut hasher);
+    let cache_key = hasher.finish();
+
+    let img = {
+        let cache = state.geometry_cache.lock().unwrap();
+        cache.get(&cache_key).cloned()
+    }
+    .ok_or_else(|| "Preview not ready for sampling".to_string())?;
+
+    let rgb = img.to_rgb32f();
+    let (w, h) = rgb.dimensions();
+    if w == 0 || h == 0 {
+        return Err("Empty image".to_string());
+    }
+
+    let cx = (x.clamp(0.0, 1.0) * (w as f32 - 1.0)).round() as i32;
+    let cy = (y.clamp(0.0, 1.0) * (h as f32 - 1.0)).round() as i32;
+
+    let radius: i32 = 2;
+    let mut sum = [0.0f64; 3];
+    let mut count = 0u32;
+    for dy in -radius..=radius {
+        for dx in -radius..=radius {
+            let sx = cx + dx;
+            let sy = cy + dy;
+            if sx >= 0 && sy >= 0 && (sx as u32) < w && (sy as u32) < h {
+                let p = rgb.get_pixel(sx as u32, sy as u32);
+                sum[0] += p[0] as f64;
+                sum[1] += p[1] as f64;
+                sum[2] += p[2] as f64;
+                count += 1;
+            }
+        }
+    }
+    if count == 0 {
+        return Err("No pixels sampled".to_string());
+    }
+
+    let mut out = [0.0f32; 3];
+    for c in 0..3 {
+        let v = (sum[c] / count as f64) as f32;
+        // working space matching the current mode (same transform run_pipeline uses)
+        out[c] = to_working(v, mode);
+    }
+    Ok(out)
 }

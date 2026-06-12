@@ -451,6 +451,23 @@ export const useKeyboardShortcuts = ({
 
     const builtinShortcuts = [
       {
+        // MOD: open Negative Conversion for the current selection (Cmd/Ctrl+Shift+N).
+        match: (e: KeyboardEvent) => (e.metaKey || e.ctrlKey) && e.shiftKey && e.code === 'KeyN',
+        execute: (e: KeyboardEvent, s: any) => {
+          e.preventDefault();
+          let targetPaths: string[] = [];
+          if (s.editor.selectedImage) {
+            targetPaths = [s.editor.selectedImage.path];
+          } else if (s.library.multiSelectedPaths?.length) {
+            targetPaths = s.library.multiSelectedPaths;
+          } else if (s.library.libraryActivePath) {
+            targetPaths = [s.library.libraryActivePath];
+          }
+          if (targetPaths.length === 0) return;
+          s.ui.setUI({ negativeModalState: { isOpen: true, targetPaths } });
+        },
+      },
+      {
         match: (e: KeyboardEvent) => e.code === 'Escape',
         execute: (e: KeyboardEvent, s: any) => {
           e.preventDefault();
