@@ -95,7 +95,7 @@ locale files need editing. The existing `handleParamChange` + `Reset` button +
 ## 3. Build & test
 
 ```bash
-cd ~/myProjects/RapidRawMod
+cd ~/myProjects/neg-invert/RapidRawMod
 npm run start
 ```
 Then in the app: load an image → right-click → **Productivity** →
@@ -107,7 +107,7 @@ Then in the app: load an image → right-click → **Productivity** →
 
 Engine-only quick check (compiles without launching the GUI):
 ```bash
-cd ~/myProjects/RapidRawMod/src-tauri && cargo build
+cd ~/myProjects/neg-invert/RapidRawMod/src-tauri && cargo build
 ```
 
 ---

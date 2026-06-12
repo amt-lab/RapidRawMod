@@ -1,6 +1,6 @@
 # Build & Run — RapidRawMod
 
-Run all commands from `~/myProjects/RapidRawMod`.
+Run all commands from `~/myProjects/neg-invert/RapidRawMod`.
 
 ## First time only
 ```bash
@@ -34,7 +34,7 @@ file: memory map must have a non-zero length`, or `ld: symbol(s) not found for
 architecture arm64` referencing a crate's `.rlib`. Fix = clean just that crate
 and rebuild (keeps everything else compiled):
 ```bash
-cd ~/myProjects/RapidRawMod/src-tauri
+cd ~/myProjects/neg-invert/RapidRawMod/src-tauri
 cargo clean -p <crate-name>   # e.g. rawler, jxl-encoder
 cargo build
 ```

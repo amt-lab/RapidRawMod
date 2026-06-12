@@ -48,7 +48,7 @@ the const in Rust and the box follows.
 
 ## 3. Test
 ```bash
-cd ~/myProjects/RapidRawMod && npm run start
+cd ~/myProjects/neg-invert/RapidRawMod && npm run start
 ```
 Negative Conversion → **Show analysis area** → a yellow box marks the central 76%
 region used for the auto black/white percentiles. Zoom/pan and confirm it tracks the

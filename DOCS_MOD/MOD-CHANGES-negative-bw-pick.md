@@ -74,7 +74,7 @@ negative_conversion::sample_negative_point,
 
 ## 4. Test
 ```bash
-cd ~/myProjects/RapidRawMod && npm run start
+cd ~/myProjects/neg-invert/RapidRawMod && npm run start
 ```
 Load image → right-click → **Productivity** → **Negative Conversion**:
 1. Click **Set Black**, then click a spot that should be black (e.g. deepest shadow /

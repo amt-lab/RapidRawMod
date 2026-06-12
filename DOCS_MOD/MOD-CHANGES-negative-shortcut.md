@@ -50,7 +50,7 @@ Edit the `match` line. `e.code` is physical-key based (`'KeyN'`); swap for anoth
 
 ## Test
 ```bash
-cd ~/myProjects/RapidRawMod && npm run start
+cd ~/myProjects/neg-invert/RapidRawMod && npm run start
 ```
 Select an image in the library (or open one in the editor) → press **Cmd/Ctrl+Shift+N**
 → the Negative Conversion modal opens for it.

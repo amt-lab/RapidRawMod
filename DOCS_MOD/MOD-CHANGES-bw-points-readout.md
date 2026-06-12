@@ -114,7 +114,7 @@ that on a negative the black point is the higher value.
 
 ## 3. Test
 ```bash
-cd ~/myProjects/RapidRawMod && npm run start
+cd ~/myProjects/neg-invert/RapidRawMod && npm run start
 ```
 Load image → right-click → **Productivity** → **Negative Conversion**. Under the
 sliders a panel shows the auto black/white points in [0,255], updating live.

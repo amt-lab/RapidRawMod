@@ -43,7 +43,7 @@ registered; only its signature gained a `mode` arg).
 
 ## 3. Test
 ```bash
-cd ~/myProjects/RapidRawMod && npm run start
+cd ~/myProjects/neg-invert/RapidRawMod && npm run start
 ```
 Negative Conversion modal → **Conversion Mode** buttons at top. Flip Linear / Pseudo-Log
 / Log on the same image and watch the look change. Tone sliders stay put across

@@ -1,0 +1,97 @@
+
+import os
+import cv2
+import numpy as np
+
+_RAW_EXTS = {
+    ".nef", ".cr2", ".cr3", ".arw", ".dng", ".orf", ".crw",
+    ".rw2", ".raf", ".pef", ".srw", ".kdc", ".mrw", ".3fr", ".erf",
+}
+
+
+def _to_float01(img):
+    # returns float32 [0,1] from uint8, uint16, or float arrays
+    if img.dtype == np.uint8:
+        return img.astype(np.float32) / 255.0
+    if img.dtype == np.uint16:
+        return img.astype(np.float32) / 65535.0
+    if np.issubdtype(img.dtype, np.unsignedinteger):
+        return img.astype(np.float32) / float(np.iinfo(img.dtype).max)
+    if np.issubdtype(img.dtype, np.floating):
+        out = img.astype(np.float32)
+        mx = float(np.nanmax(out)) if out.size else 0.0
+        return np.clip(out / mx if mx > 1.0 else out, 0.0, 1.0)
+    # signed int fallback: shift to unsigned range
+    out = img.astype(np.float32)
+    mx = float(np.nanmax(out)) if out.size else 0.0
+    return np.clip(out / mx if mx > 1.0 else out, 0.0, 1.0)
+
+
+def read_image(path):
+    # returns float32, range [0,1], rgb; also returns src_max (255 or 65535) for saving
+    raw = cv2.imread(path, cv2.IMREAD_UNCHANGED)
+    if raw is None:
+        raise FileNotFoundError(f"cv2 cannot read: {path}")
+    src_max = 65535 if raw.dtype == np.uint16 else 255
+    if raw.ndim == 2:
+        raw = np.repeat(raw[:, :, None], 3, axis=2)
+    elif raw.shape[2] == 4:
+        raw = raw[:, :, :3]
+    rgb = raw[:, :, ::-1]  # BGR -> RGB
+    return _to_float01(rgb), src_max
+
+
+def read_raw_image(path, *, use_camera_wb=True, user_flip=0, gamma=(2.222, 4.5)):
+    # returns float32, range [0,1], rgb; src_max is always 65535
+    try:
+        import rawpy
+    except ImportError:
+        raise ImportError("rawpy is not installed: pip install rawpy")
+    with rawpy.imread(path) as raw:
+        rgb16 = raw.postprocess(
+            output_bps=16,
+            no_auto_bright=True,
+            use_camera_wb=use_camera_wb,
+            user_flip=user_flip,
+            demosaic_algorithm=rawpy.DemosaicAlgorithm.AHD,
+            gamma=gamma,
+        )
+    return _to_float01(rgb16)  # rawpy output is already RGB
+
+
+def save_processed_image(processed_f, original_path=None, src_max=255, suffix="_eqblend", fallback_ext=".tif"):
+    """Save float RGB image using cv2 only (RGB->BGR before write)."""
+    if original_path:
+        base_dir, fname = os.path.split(original_path)
+        base_name, ext = os.path.splitext(fname)
+        if not ext:
+            ext = fallback_ext
+    else:
+        base_dir, base_name, ext = os.getcwd(), "image", fallback_ext
+
+    out_path = os.path.join(base_dir, f"{base_name}{suffix}{ext}")
+    use_u16 = (src_max > 255) and (ext.lower() in {".tif", ".tiff", ".png"})
+    scale = 65535.0 if use_u16 else 255.0
+    dtype = np.uint16 if use_u16 else np.uint8
+    out = np.clip(processed_f * scale + 0.5, 0.0, scale).astype(dtype)
+    out_bgr = cv2.cvtColor(out, cv2.COLOR_RGB2BGR)
+    if not cv2.imwrite(out_path, out_bgr):
+        raise IOError(f"cv2.imwrite failed: {out_path}")
+    return out_path
+
+
+def save_processed_image_as_jpeg(processed_f, original_path=None, suffix="_eqblend", quality=95):
+    """Save float RGB image as JPEG."""
+    if original_path:
+        base_dir, fname = os.path.split(original_path)
+        base_name, _ = os.path.splitext(fname)
+    else:
+        base_dir, base_name = os.getcwd(), "image"
+
+    out_path = os.path.join(base_dir, f"{base_name}{suffix}.jpg")
+    out = np.clip(processed_f * 255.0 + 0.5, 0.0, 255.0).astype(np.uint8)
+    out_bgr = cv2.cvtColor(out, cv2.COLOR_RGB2BGR)
+    q = int(np.clip(quality, 1, 100))
+    if not cv2.imwrite(out_path, out_bgr, [cv2.IMWRITE_JPEG_QUALITY, q]):
+        raise IOError(f"cv2.imwrite failed: {out_path}")
+    return out_path
