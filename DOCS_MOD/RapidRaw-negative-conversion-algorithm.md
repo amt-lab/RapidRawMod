@@ -26,9 +26,9 @@ OpenCV / camera decoders may load as BGR; this algorithm expects RGB.
 
 | Control | Default | Range | Step | Stage | Origin |
 |---|---|---|---|---|---|
-| Red weight | 1.0 | 0.5 – 2.0 | 0.01 | B3 | original |
-| Green weight | 1.0 | 0.5 – 2.0 | 0.01 | B3 | original |
-| Blue weight | 1.0 | 0.5 – 2.0 | 0.01 | B3 | original |
+| Red weight | 1.0 | 0.75 – 1.5 | 0.01 | B3 | original (range halved — mod) |
+| Green weight | 1.0 | 0.75 – 1.5 | 0.01 | B3 | original (range halved — mod) |
+| Blue weight | 1.0 | 0.75 – 1.5 | 0.01 | B3 | original (range halved — mod) |
 | Exposure | 0.0 | −2.0 – 2.0 | 0.05 | B4 | original |
 | Contrast | 1.0 | 0.5 – 2.5 | 0.05 | B4 | original |
 | **Mode** (lin/psl/log) | **log** | — | — | **B1** | **mod** |

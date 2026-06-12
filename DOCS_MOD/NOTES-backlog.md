@@ -142,4 +142,6 @@ Set White interaction).
 ## Cross-reference
 - `MOD-CHANGES-gamma-slider.md` — gamma slider
 - `MOD-CHANGES-bw-points-readout.md` — auto black/white point readout
+- `MOD-CHANGES-slider-sensitivity.md` — halved Color Timing (RGB weight) slider range
+- `FUTURES-direction-and-choices.md` — merging clone + neg-invert; Python vs Rust/Tauri; rawpy vs rawler
 - `RapidRawMod-WORKFLOW.md` (in `~/myProjects/`) — git/update workflow

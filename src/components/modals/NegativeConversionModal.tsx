@@ -331,8 +331,8 @@ export default function NegativeConversionModal({
             <Slider
               label={t('modals.negativeConversion.redWeight')}
               value={params.red_weight}
-              min={0.5}
-              max={2.0}
+              min={0.75}
+              max={1.5}
               step={0.01}
               defaultValue={1}
               onChange={(e) => handleParamChange('red_weight', Number(e.target.value))}
@@ -341,8 +341,8 @@ export default function NegativeConversionModal({
             <Slider
               label={t('modals.negativeConversion.greenWeight')}
               value={params.green_weight}
-              min={0.5}
-              max={2.0}
+              min={0.75}
+              max={1.5}
               step={0.01}
               defaultValue={1}
               onChange={(e) => handleParamChange('green_weight', Number(e.target.value))}
@@ -351,8 +351,8 @@ export default function NegativeConversionModal({
             <Slider
               label={t('modals.negativeConversion.blueWeight')}
               value={params.blue_weight}
-              min={0.5}
-              max={2.0}
+              min={0.75}
+              max={1.5}
               step={0.01}
               defaultValue={1}
               onChange={(e) => handleParamChange('blue_weight', Number(e.target.value))}

@@ -92,52 +92,7 @@ on PATH: `source "$HOME/.cargo/env"`. Build-error recovery: see `DOCS_MOD/BUILD-
 
 ---
 
-## Git / GitHub workflow
+## Git / GitHub
 
-You have two GitHub remotes:
-
-| Remote | Points to | Use |
-|---|---|---|
-| `origin` | `amt-lab/RapidRawMod` (your fork) | where you push your work |
-| `upstream` | `CyberTimon/RapidRAW` (the original) | where you pull updates from |
-
-Branches: **`mod`** holds the modifications (this is your working branch);
-**`main`** tracks the unmodified upstream. **Do your work on `mod`.**
-
-### See what's changed
-```bash
-git status          # which files are new/modified/deleted
-git diff            # the actual line changes (not yet staged)
-```
-
-### Save your work (commit + push)
-```bash
-git add -A                       # stage all changes (or: git add <file> for specific ones)
-git commit -m "Short description of what changed"
-git push                         # uploads the mod branch to origin (your fork on GitHub)
-```
-A **commit** is a local checkpoint; **push** uploads checkpoints to GitHub. Commit
-often, push when you want it backed up / shared. (`git add -A` also records file moves
-and deletions — e.g. the docs you moved into `DOCS_MOD/` are staged by this.)
-
-### Undo before committing
-```bash
-git restore <file>     # discard changes to one file (careful: not recoverable)
-git restore --staged <file>   # unstage a file but keep its changes
-```
-
-### Pull upstream RapidRAW updates (occasional, can get messy)
-```bash
-git fetch upstream            # download upstream's new commits (doesn't change your files)
-git checkout main             # switch to the clean tracking branch
-git merge upstream/main       # bring main up to date
-git checkout mod              # back to your work
-git merge main                # replay upstream changes under your mods
-```
-Because the mods are confined to two files, conflicts should be rare and localized. If a
-merge conflict appears, stop and resolve carefully (or ask for help) — don't force it.
-
-### Housekeeping
-- `tmp/` is a scratch folder and is untracked. Don't commit it; add it to `.gitignore`
-  if it keeps showing up in `git status`.
-- Don't commit `src-tauri/target/` or `node_modules/` (already gitignored).
+Everyday git workflow, remotes, undo, and pulling upstream updates live in a separate
+cheat-sheet: **`README-MOD-git.md`**.
